@@ -1,0 +1,30 @@
+# Reference sample -- NOT applied by config/samples/kustomization.yaml.
+#
+# kustomization.yaml is applied wholesale by hack/setup-e2e.sh, so anything
+# listed there is created on every e2e run. Skill resources are inert and belong
+# there; providers and runs are not and do not.
+#
+# For a runnable version see hack/dev/resources/.
+apiVersion: konveyor.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: anthropic
+spec:
+  endpoint: https://api.anthropic.com
+
+  # Single-value credential. The controller injects it into sandbox containers
+  # as KONVEYOR_MODEL_<ROLE>_API_KEY.
+  #
+  # Omit `key` for multi-variable credentials (AWS SigV4, Vertex AI service
+  # accounts): the whole Secret is then exposed via envFrom, using the Secret's
+  # own keys as variable names.
+  credentialRef:
+    secretName: anthropic-credentials
+    key: api-key
+
+  # contextWindow is used to check that an Agent's always-loaded rules fit
+  # within budget before a run starts.
+  models:
+    - name: claude-sonnet-4-5
+      contextWindow: 200000
+      tier: premium

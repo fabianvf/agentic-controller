@@ -1,0 +1,42 @@
+# Reference sample -- NOT applied by config/samples/kustomization.yaml.
+# For a runnable version see hack/dev/resources/.
+#
+# An Agent is a TEMPLATE: it declares what is available, and creating one
+# executes nothing. It deliberately does not select a model -- that happens at
+# execution time in the AgentRun, from the set of providers listed here.
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: java-migration
+spec:
+  # Carries the agent runtime and the language toolchain.
+  image: quay.io/konveyor/agent-base-goose-java:latest
+
+  # Standing instructions for how this agent operates, as opposed to the
+  # per-run task, which is AgentRun.spec.instructions.
+  prompt: |
+    You are a Java migration agent. Apply the mounted skills to migrate the
+    application in /workspace. Do not modify files outside the workspace.
+
+  # One or more providers. Ready-ness of every one of these gates the Agent.
+  providers:
+    - ref: anthropic
+
+  # Skills mount as read-only ImageVolumes at /opt/skills/<name>/.
+  skillCards:
+    - ref: maven-migration
+  skillCollections:
+    - ref: java-migration-skills
+
+  # Typed inputs an AgentRun must supply. The controller injects them as
+  # KONVEYOR_PARAM_<NAME>. Values are opaque to the controller -- it never
+  # interprets them, which is what keeps it domain-agnostic.
+  params:
+    - name: source_url
+      type: string
+      description: Git URL of the source repository
+      required: true
+    - name: target_branch
+      type: string
+      description: Branch to push results to
+      default: konveyor/migration

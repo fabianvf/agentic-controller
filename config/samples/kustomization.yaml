@@ -1,6 +1,15 @@
 # Default skill resources installed with the controller.
 # These provide out-of-the-box migration skills backed by
 # OCI images pushed to quay.io/konveyor/skills/.
+#
+# Only inert resources belong here. hack/setup-e2e.sh applies this directory
+# wholesale, so anything listed is created on every e2e setup -- an Agent or
+# AgentRun here would spawn sandbox pods every time, and would break
+# `make deploy` against a real cluster since it references local-only images.
+#
+# The konveyor.io_v1alpha1_*.yaml files in this directory are reference
+# documentation and are intentionally NOT listed below. For runnable versions
+# see hack/dev/resources/.
 resources:
   - skillcard_maven_migration.yaml
   - skillcard_no_javax_imports.yaml

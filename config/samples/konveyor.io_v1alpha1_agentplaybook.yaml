@@ -1,0 +1,54 @@
+# Reference sample -- NOT applied by config/samples/kustomization.yaml.
+# For a runnable version see hack/dev/resources/playbook.yaml.
+#
+# An AgentPlaybook is a TEMPLATE (Tekton Pipeline to AgentRun's TaskRun).
+# Stages run sequentially, each in its own fresh Sandbox with a fresh agent
+# session. Continuity between stages comes from committed files on the shared
+# target branch -- e.g. .konveyor/handoff.md -- not from shared process state.
+apiVersion: konveyor.io/v1alpha1
+kind: AgentPlaybook
+metadata:
+  name: java-migration-playbook
+spec:
+  # Ambient context for every stage, written into the workspace so each agent
+  # understands where its work fits in the whole.
+  guide: |
+    Migrate a Java EE application to Quarkus in three stages: plan the work,
+    execute the plan, then verify the result builds and tests pass.
+
+  stages:
+    - name: plan
+      agentRef: java-migration
+      instructions: "Analyse the application and write PLAN.md. Do not modify source."
+    - name: execute
+      agentRef: java-migration
+      instructions: "Apply PLAN.md. Commit incrementally."
+    - name: verify
+      agentRef: java-migration
+      instructions: "Build and test. Fix what fails."
+---
+# An AgentPlaybookRun is the INVOCATION: it creates one AgentRun per stage,
+# sequentially, all sharing a target branch.
+apiVersion: konveyor.io/v1alpha1
+kind: AgentPlaybookRun
+metadata:
+  name: migrate-coolstore-playbook
+spec:
+  playbookRef: java-migration-playbook
+
+  models:
+    - role: primary
+      provider: anthropic
+      model: claude-sonnet-4-5
+
+  # NOTE: params are forwarded wholesale to every stage's AgentRun, and the
+  # AgentRun controller rejects any param its Agent does not declare. So a param
+  # needed by one stage must currently be declared by every stage's Agent.
+  # Tracked in konveyor/agentic-controller#52.
+  params:
+    - name: source_url
+      value: https://github.com/konveyor/example-app.git
+
+  envFrom:
+    - secretRef:
+        name: git-credentials

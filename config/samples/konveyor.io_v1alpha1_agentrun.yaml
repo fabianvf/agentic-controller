@@ -1,0 +1,39 @@
+# Reference sample -- NOT applied by config/samples/kustomization.yaml.
+# For a runnable version see hack/dev/resources/.
+#
+# An AgentRun is an INVOCATION: creating one triggers execution. The controller
+# validates the selections against the Agent, resolves skills to OCI refs and
+# providers to Secrets, then creates a Sandbox.
+apiVersion: konveyor.io/v1alpha1
+kind: AgentRun
+metadata:
+  name: migrate-coolstore
+spec:
+  agentRef: java-migration
+
+  # Model selection happens here, not on the Agent. Each entry carries a role
+  # that the base image maps to runtime-specific configuration; the controller
+  # exposes it as KONVEYOR_MODEL_<ROLE>_*. Must be in the Agent's provider set.
+  models:
+    - role: primary
+      provider: anthropic
+      model: claude-sonnet-4-5
+
+  # Must match the params the Agent declares -- an undeclared param is rejected.
+  params:
+    - name: source_url
+      value: https://github.com/konveyor/example-app.git
+
+  # The task for this run, composed with the Agent's prompt at execution time.
+  instructions: |
+    Migrate this Java EE application to Quarkus. Commit your work incrementally.
+
+  # env and envFrom pass through to the sandbox container unchanged. Git push
+  # credentials belong here rather than in params: the harness consumes them and
+  # never exposes them to the agent process.
+  env:
+    - name: GIT_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: git-credentials
+          key: token
