@@ -1,0 +1,79 @@
+---
+# Real-agent test fixtures: PR #53 harness + real Anthropic model + Hub.
+#
+# Purpose: observe where a real model stages a script it is told to write and
+# run. ADR 0007 asserts the convention should be /tmp (outside the git
+# worktree); this is the experiment that checks what actually happens.
+#
+# Applied by hack/dev/pr53-test.sh, which substitutes the __PLACEHOLDER__
+# values. The API key is never written to this file.
+
+# NOTE: the CR name is load-bearing. The controller sets
+# KONVEYOR_MODEL_<ROLE>_PROVIDER to the LLMProvider's *name*
+# (agentrun_controller.go:467), and the harness lowercases it into
+# GOOSE_PROVIDER. It must literally be "anthropic" for goose to select the
+# Anthropic provider -- "dev-provider" would become GOOSE_PROVIDER=dev_provider.
+apiVersion: konveyor.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: anthropic
+spec:
+  endpoint: "https://api.anthropic.com"
+  credentialRef:
+    secretName: anthropic-credentials
+    key: api-key
+  models:
+    - name: __LLM_MODEL__
+      contextWindow: 200000
+      tier: premium
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: exec-convention
+spec:
+  image: quay.io/konveyor/skills:exec-convention
+  displayName: Exec Convention Probe
+  version: "1.0.0"
+  description: Asks the agent to write and run a verification script.
+  type: skill
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: pr53-agent
+spec:
+  image: __AGENT_IMAGE__
+  # Says nothing about where to write: the harness injects that rule.
+  prompt: |
+    You are a migration agent operating on a checked-out repository.
+    Follow the mounted skill instructions exactly.
+  providers:
+    - ref: anthropic
+  skillCards:
+    - ref: exec-convention
+---
+apiVersion: konveyor.io/v1alpha1
+kind: AgentRun
+metadata:
+  name: pr53-run
+spec:
+  agentRef: pr53-agent
+  models:
+    - role: primary
+      provider: anthropic
+      model: __LLM_MODEL__
+  instructions: |
+    Run the verification script from the skill and report its output.
+  env:
+    # The PR #53 harness refuses to start without these.
+    - name: HUB_BASE_URL
+      value: "http://tackle-hub.default.svc:8080"
+    - name: APP_ID
+      value: "__APP_ID__"
+    # Must differ from the source branch or the harness rejects it.
+    - name: TARGET_BRANCH
+      value: "__TARGET_BRANCH__"
+    # Keep the run short: this is an observation, not a migration.
+    - name: KONVEYOR_PARAM_MAX_TURNS
+      value: "12"

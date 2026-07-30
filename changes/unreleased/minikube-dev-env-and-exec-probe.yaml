@@ -1,0 +1,8 @@
+kind: feature
+description: >
+  Add a minikube-based local development environment (make dev-*) that runs on
+  CRI-O, the runtime OpenShift uses, along with a probe that determines whether
+  agents can stage and execute scripts in a given cluster. Includes dev CR
+  fixtures covering the full AgentRun and AgentPlaybookRun flow against a real
+  LLM provider, and an opt-in KONVEYOR_STUB_MODE=exit for the stub agent so
+  playbook stages complete instead of hanging.

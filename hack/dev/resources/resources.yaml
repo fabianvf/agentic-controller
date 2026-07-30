@@ -1,0 +1,84 @@
+---
+# Dev fixtures: the full chain from credentials to a running AgentRun.
+#
+#   Secret -> LLMProvider -> SkillCard -> Agent -> AgentRun -> Sandbox
+#
+# Applied by hack/dev/apply.sh, which substitutes the __PLACEHOLDER__ values and
+# creates secret/dev-llm-credentials from $ANTHROPIC_API_KEY. The key never
+# appears in this file.
+#
+# Kept out of config/samples/ deliberately: hack/setup-e2e.sh applies that
+# directory wholesale, so an Agent/AgentRun there would spawn sandbox pods on
+# every e2e run and would break `make deploy` against a real cluster (the :e2e
+# images exist only in a local cluster).
+
+# LLMProvider. Endpoint and model are substituted so the same fixture serves
+# both the real Anthropic API and the keyless emulator.
+#
+# The single-key form (credentialRef.key) is what makes the controller inject
+# KONVEYOR_MODEL_PRIMARY_API_KEY into the sandbox. Omitting `key` would instead
+# expose the whole Secret via envFrom, which is the multi-variable form used by
+# providers like Vertex AI or Bedrock.
+apiVersion: konveyor.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: dev-provider
+spec:
+  endpoint: "__LLM_ENDPOINT__"
+  credentialRef:
+    secretName: dev-llm-credentials
+    key: api-key
+  models:
+    - name: __LLM_MODEL__
+      contextWindow: 200000
+      tier: premium
+---
+# A skill to mount, so the sandbox pod has something at /opt/skills/<name>.
+# Built and loaded locally by `make dev-skills`.
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: dev-skill
+spec:
+  image: quay.io/konveyor/skills:maven-migration
+  displayName: Dev Test Skill
+  version: "1.0.0"
+  description: A skill mounted into the dev sandbox for poking at.
+  type: skill
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: dev-agent
+spec:
+  image: __AGENT_IMAGE__
+  prompt: "You are a local development agent."
+  providers:
+    - ref: dev-provider
+  skillCards:
+    - ref: dev-skill
+  params:
+    - name: source_url
+      type: string
+      description: Git URL of the source repository
+      required: true
+    - name: target_branch
+      type: string
+      default: konveyor/dev
+---
+# A long-lived run. The stub agent sleeps rather than exiting, which keeps the
+# pod around for `make dev-shell` and `make dev-probe`.
+apiVersion: konveyor.io/v1alpha1
+kind: AgentRun
+metadata:
+  name: dev-run
+spec:
+  agentRef: dev-agent
+  models:
+    - role: primary
+      provider: dev-provider
+      model: __LLM_MODEL__
+  params:
+    - name: source_url
+      value: "https://github.com/konveyor/example-app.git"
+  instructions: "Local dev run. Log params and stay alive for inspection."

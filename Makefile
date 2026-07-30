@@ -11,10 +11,10 @@ GOBIN=$(shell go env GOBIN)
 endif
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
-# Be aware that the target commands are only tested with Docker which is
-# scaffolded by default. However, you might want to replace it to use other
-# tools. (i.e. podman)
-CONTAINER_TOOL ?= docker
+# Auto-detected, podman first, matching what the hack/ scripts have always done.
+# Previously hardcoded to docker, which made every image target fail outright on
+# a podman-only machine even though the scripts handled it correctly.
+CONTAINER_TOOL ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -39,7 +39,7 @@ all: build
 
 .PHONY: help
 help: ## Display this help.
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 ##@ Development
 
@@ -184,6 +184,133 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Local Development
+
+# A local cluster for poking at the controller and the full AgentRun flow.
+#
+# minikube rather than kind because kind is containerd-only, and CRI-O (what
+# OpenShift runs) handles image-volume mounts differently. The kind targets
+# above are untouched and remain the CI regression path.
+#
+# All scripts export a repo-local KUBECONFIG, so none of this touches your
+# current kubectl context.
+CONTAINER_RUNTIME      ?= cri-o
+MINIKUBE_PROFILE       ?= agentic-dev
+MINIKUBE_DRIVER        ?= $(CONTAINER_TOOL)
+MINIKUBE_K8S_VERSION   ?= v1.34.0
+MINIKUBE_CPUS          ?= 4
+MINIKUBE_MEMORY        ?= 6144
+# ImageVolume is beta (default-on) from k8s 1.33. Set empty to omit the flags,
+# which is required once the gate is GA'd and removed.
+MINIKUBE_FEATURE_GATES ?= ImageVolume=true
+DEV_IMG                ?= quay.io/konveyor/agentic-controller:e2e
+DEV_AGENT_IMG          ?= quay.io/konveyor/agentic-controller-agent:e2e
+DEV_KUBECONFIG         ?= $(CURDIR)/.dev/$(MINIKUBE_PROFILE).kubeconfig
+DEV_RESULTS_DIR        ?= $(CURDIR)/.dev/results
+# Extra flags for dev-apply, e.g. DEV_APPLY_ARGS=--emulator to skip the real key.
+DEV_APPLY_ARGS         ?=
+AGENT_RUN              ?= dev-run
+
+DEV_ENV = CONTAINER_RUNTIME=$(CONTAINER_RUNTIME) \
+          CONTAINER_TOOL=$(CONTAINER_TOOL) \
+          MINIKUBE_PROFILE=$(MINIKUBE_PROFILE) \
+          MINIKUBE_DRIVER=$(MINIKUBE_DRIVER) \
+          MINIKUBE_K8S_VERSION=$(MINIKUBE_K8S_VERSION) \
+          MINIKUBE_CPUS=$(MINIKUBE_CPUS) \
+          MINIKUBE_MEMORY=$(MINIKUBE_MEMORY) \
+          MINIKUBE_FEATURE_GATES=$(MINIKUBE_FEATURE_GATES) \
+          DEV_IMG=$(DEV_IMG) \
+          DEV_AGENT_IMG=$(DEV_AGENT_IMG) \
+          DEV_KUBECONFIG=$(DEV_KUBECONFIG) \
+          DEV_RESULTS_DIR=$(DEV_RESULTS_DIR) \
+          AGENT_RUN=$(AGENT_RUN)
+
+.PHONY: dev-doctor
+dev-doctor: ## Preflight the local dev environment (tools, driver, arch, runtime, gate).
+	$(DEV_ENV) hack/dev/doctor.sh
+
+.PHONY: dev-cluster
+dev-cluster: ## Create/start the local minikube cluster with Agent Sandbox.
+	$(DEV_ENV) hack/dev/up.sh
+
+.PHONY: dev-deploy
+dev-deploy: ## Install CRDs and deploy the controller into the local cluster.
+	$(DEV_ENV) hack/dev/deploy.sh
+
+.PHONY: dev-load
+dev-load: ## Rebuild + reload controller and agent images, then restart the controller.
+	$(DEV_ENV) hack/dev/load.sh controller
+	$(DEV_ENV) hack/dev/load.sh agent
+	@# Only restart if the controller is already deployed: dev-load runs both
+	@# before the first dev-deploy and for iteration afterwards.
+	@if KUBECONFIG=$(DEV_KUBECONFIG) $(KUBECTL) get deployment/agentic-controller-controller-manager \
+	      -n agentic-controller-system >/dev/null 2>&1; then \
+	  KUBECONFIG=$(DEV_KUBECONFIG) $(KUBECTL) rollout restart \
+	    deployment/agentic-controller-controller-manager -n agentic-controller-system ; \
+	else \
+	  printf 'Controller not deployed yet; skipping rollout restart.\n' ; \
+	fi
+
+.PHONY: dev-skills
+dev-skills: ## Rebuild and reload the skill images into the local cluster.
+	$(DEV_ENV) hack/dev/load.sh skills
+
+.PHONY: dev-apply
+dev-apply: ## Apply the dev CRs (needs ANTHROPIC_API_KEY; DEV_APPLY_ARGS=--emulator to skip).
+	$(DEV_ENV) hack/dev/apply.sh $(DEV_APPLY_ARGS)
+
+.PHONY: dev-reset
+dev-reset: ## Delete and re-apply the dev CRs for a fresh run.
+	$(DEV_ENV) hack/dev/apply.sh --reset $(DEV_APPLY_ARGS)
+
+.PHONY: dev-up
+dev-up: dev-cluster dev-load dev-skills dev-deploy ## Full local environment: cluster, images, controller.
+	@printf '\nEnvironment ready. Next:\n'
+	@printf '  eval "$$(make dev-kubeconfig)"   # point your shell at it\n'
+	@printf '  make dev-apply                   # create the dev CRs\n'
+	@printf '  make dev-probe                   # answer the exec question\n'
+
+.PHONY: dev-hub
+dev-hub: ## Deploy Tackle Hub into the local cluster and seed an Application.
+	$(DEV_ENV) hack/dev/hub.sh
+
+.PHONY: dev-hub-appid
+dev-hub-appid: ## Print the seeded Hub application ID.
+	@$(DEV_ENV) hack/dev/hub.sh --app-id
+
+.PHONY: dev-probe
+dev-probe: ## Probe whether agents can stage and execute scripts in this cluster.
+	$(DEV_ENV) hack/probe/run-probe.sh
+
+.PHONY: dev-status
+dev-status: ## Show CRs, Sandboxes, and pods in the local cluster.
+	$(DEV_ENV) hack/dev/status.sh
+
+.PHONY: dev-logs
+dev-logs: ## Follow controller-manager logs.
+	KUBECONFIG=$(DEV_KUBECONFIG) $(KUBECTL) logs -f \
+	  -n agentic-controller-system deployment/agentic-controller-controller-manager
+
+.PHONY: dev-agent-logs
+dev-agent-logs: ## Follow the sandbox pod logs for AGENT_RUN (default: dev-run).
+	$(DEV_ENV) hack/dev/agent.sh logs
+
+.PHONY: dev-shell
+dev-shell: ## Open a shell in the sandbox pod for AGENT_RUN (default: dev-run).
+	$(DEV_ENV) hack/dev/agent.sh shell
+
+.PHONY: dev-kubeconfig
+dev-kubeconfig: ## Print the export line for the local cluster kubeconfig.
+	@printf 'export KUBECONFIG=%s\n' "$(DEV_KUBECONFIG)"
+
+.PHONY: dev-stop
+dev-stop: ## Stop the local cluster without deleting it.
+	minikube stop -p $(MINIKUBE_PROFILE)
+
+.PHONY: dev-down
+dev-down: ## Delete the local cluster and its kubeconfig.
+	$(DEV_ENV) hack/dev/down.sh
 
 ##@ Skills
 

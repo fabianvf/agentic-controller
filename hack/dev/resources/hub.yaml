@@ -1,0 +1,86 @@
+---
+# Tackle Hub, standalone, for local development.
+#
+# The harness (PR #53) fetches application metadata and git credentials from
+# Hub at runtime and refuses to start without HUB_BASE_URL and APP_ID. Hub is
+# also what Streams 2 and 3 build on, so this is reusable infrastructure rather
+# than test scaffolding.
+#
+# Configuration follows tackle2-hub's own hack/run_local.sh and its
+# .github/actions/start-hub: sqlite on disk, no external services.
+#   DISCONNECTED=true   do not try to drive Kubernetes Tasks/addons
+#   AUTH_REQUIRED=false no login handshake, so the binding client works
+#                       without a token (do not copy this to a real cluster)
+#   DB_SEED_PATH        the published image bundles seed resources at /tmp/seed
+apiVersion: v1
+kind: Service
+metadata:
+  name: tackle-hub
+  labels:
+    app.kubernetes.io/name: tackle-hub
+spec:
+  selector:
+    app.kubernetes.io/name: tackle-hub
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tackle-hub
+  labels:
+    app.kubernetes.io/name: tackle-hub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tackle-hub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tackle-hub
+    spec:
+      containers:
+        - name: hub
+          image: quay.io/konveyor/tackle2-hub:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DISCONNECTED
+              value: "true"
+            - name: AUTH_REQUIRED
+              value: "false"
+            - name: API_PORT
+              value: "8080"
+            - name: DB_PATH
+              value: /hub/data/hub.db
+            - name: BUCKET_PATH
+              value: /hub/data/bucket
+            - name: DB_SEED_PATH
+              value: /tmp/seed
+          volumeMounts:
+            - name: data
+              mountPath: /hub/data
+          readinessProbe:
+            httpGet:
+              path: /schema
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            # Seeding on first boot takes a while; be generous before declaring
+            # failure or the Deployment flaps during initial migration.
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /schema
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 6
+      volumes:
+        # emptyDir: the dev Hub is disposable. Swap for a PVC if you want the
+        # seeded application to survive a pod restart.
+        - name: data
+          emptyDir: {}

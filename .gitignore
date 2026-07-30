@@ -31,3 +31,6 @@ go.work
 
 # Local scratch files
 .scratch/
+
+# Local dev cluster state: kubeconfig, profile state markers, probe results
+.dev/

@@ -1,0 +1,12 @@
+apiVersion: skillimage.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: exec-convention
+  namespace: konveyor
+  version: "1.0.0"
+  description: Runs a repository verification script and reports its output.
+  tags:
+    - dev
+    - diagnostic
+spec:
+  prompt: SKILL.md

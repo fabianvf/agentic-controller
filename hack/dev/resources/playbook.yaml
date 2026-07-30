@@ -1,0 +1,49 @@
+---
+# Two-stage playbook fixture.
+#
+# No AgentPlaybook/AgentPlaybookRun YAML existed anywhere in the repo before
+# this -- only Go struct literals in agentplaybookrun_controller_test.go -- so
+# there was no way to exercise the multi-stage path by hand.
+#
+# Stages run sequentially, each in its own fresh Sandbox. Continuity between
+# them comes from committed files on the shared branch, not from shared memory.
+apiVersion: konveyor.io/v1alpha1
+kind: AgentPlaybook
+metadata:
+  name: dev-playbook
+spec:
+  guide: |
+    Local development playbook. Stage 1 inspects the workspace, stage 2
+    reports on it. Exists to exercise sequential stage execution, per-stage
+    Sandbox creation, and status aggregation.
+  stages:
+    - name: inspect
+      agentRef: dev-agent
+      instructions: "Stage 1: inspect the workspace and record what you find."
+    - name: report
+      agentRef: dev-agent
+      instructions: "Stage 2: read stage 1's handoff and report."
+---
+apiVersion: konveyor.io/v1alpha1
+kind: AgentPlaybookRun
+metadata:
+  name: dev-playbook-run
+spec:
+  playbookRef: dev-playbook
+  models:
+    - role: primary
+      provider: dev-provider
+      model: __LLM_MODEL__
+  params:
+    - name: source_url
+      value: "https://github.com/konveyor/example-app.git"
+  env:
+    # Without this the stub agent runs `exec sleep infinity`, its AgentRun never
+    # reaches Succeeded, and the playbook hangs on stage 1 forever.
+    #
+    # spec.env is forwarded to every stage's AgentRun
+    # (agentplaybookrun_controller.go:323), so one setting covers both stages.
+    # The standalone dev-run AgentRun deliberately omits it and stays alive for
+    # `make dev-shell` and `make dev-probe`.
+    - name: KONVEYOR_STUB_MODE
+      value: exit
